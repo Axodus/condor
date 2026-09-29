@@ -9,6 +9,7 @@ from typing import Any
 class DeploymentEnvironment(StrEnum):
     TESTNET = "TESTNET"
     MAINNET = "MAINNET"
+    PAPER_MAINNET_DATA = "PAPER_MAINNET_DATA"
 
 
 class CondorDeploymentDecision(StrEnum):
@@ -16,6 +17,8 @@ class CondorDeploymentDecision(StrEnum):
     TESTNET_BLOCKED = "TESTNET_BLOCKED"
     MAINNET_DISPATCH_AUTHORIZED = "MAINNET_DISPATCH_AUTHORIZED"
     MAINNET_BLOCKED = "MAINNET_BLOCKED"
+    PAPER_DISPATCH_AUTHORIZED = "PAPER_DISPATCH_AUTHORIZED"
+    PAPER_BLOCKED = "PAPER_BLOCKED"
     CANDIDATE_REJECTED = "CANDIDATE_REJECTED"
 
 
@@ -51,6 +54,7 @@ class DeploymentCandidatePayload:
 @dataclass(frozen=True)
 class CondorOperationalGateContext:
     environment: DeploymentEnvironment = DeploymentEnvironment.TESTNET
+    paper_adapter_available: bool = True
     hummingbot_adapter_available: bool = True
     credentials_configured: bool = True
     safety_supervisor_active: bool = True
@@ -78,6 +82,30 @@ class CondorDeploymentGate:
                 "decision": CondorDeploymentDecision.CANDIDATE_REJECTED.value,
                 "environment": ctx.environment.value,
                 "blockers": [f"RESEARCH_STATUS_NOT_POSITIVE_{candidate.research_status}"],
+                "candidate": candidate.to_dict(),
+            }
+
+        if ctx.environment == DeploymentEnvironment.PAPER_MAINNET_DATA:
+            if not ctx.paper_adapter_available:
+                blockers.append("PAPER_ADAPTER_UNAVAILABLE")
+            if not ctx.execution_readiness_passed:
+                blockers.append("EXECUTION_READINESS_NOT_PASSED")
+            if not ctx.protection_readiness_passed:
+                blockers.append("PROTECTION_READINESS_NOT_PASSED")
+            if not ctx.safety_supervisor_active:
+                blockers.append("SAFETY_SUPERVISOR_INACTIVE")
+            if not ctx.risk_authority_approved:
+                blockers.append("RISK_AUTHORITY_NOT_APPROVED")
+            decision = (
+                CondorDeploymentDecision.PAPER_DISPATCH_AUTHORIZED
+                if not blockers
+                else CondorDeploymentDecision.PAPER_BLOCKED
+            )
+            return {
+                "decision": decision.value,
+                "environment": DeploymentEnvironment.PAPER_MAINNET_DATA.value,
+                "blockers": blockers,
+                "executionTarget": "PAPER_EXECUTION_ENGINE" if not blockers else None,
                 "candidate": candidate.to_dict(),
             }
 
