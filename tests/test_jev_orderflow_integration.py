@@ -11,8 +11,12 @@ from condor.deployment_candidate import DeploymentCandidatePayload
 from condor.jev_qualification import (
     CandidateTriggerV1,
     DeterministicMockJevClient,
+    JevActionType,
+    JevDecisionV1,
     JevDecisionType,
     JevValidationError,
+    MicrotrendJevReasonCode,
+    microtrend_outcome,
 )
 from condor.orderflow_orchestrator import (
     CONNECTOR,
@@ -94,6 +98,65 @@ def signal(signal_id: str = "signal-1", revision: str | None = None):
     if revision is not None:
         result["strategy_revision"] = revision
     return result
+
+
+@pytest.mark.parametrize(
+    ("reason_code", "decision_type", "action", "side"),
+    [
+        (MicrotrendJevReasonCode.CONTINUATION, JevDecisionType.SIGNAL_QUALIFIED, JevActionType.ENTRY, "BUY"),
+        (MicrotrendJevReasonCode.NEUTRAL, JevDecisionType.NO_ACTION, JevActionType.NONE, "NONE"),
+        (MicrotrendJevReasonCode.REVERSAL_RISK, JevDecisionType.SIGNAL_REJECTED, JevActionType.NONE, "NONE"),
+        (MicrotrendJevReasonCode.INVALID, JevDecisionType.SIGNAL_REJECTED, JevActionType.NONE, "NONE"),
+    ],
+)
+def test_microtrend_reason_codes_preserve_the_typed_jev_contract(
+    reason_code: MicrotrendJevReasonCode,
+    decision_type: JevDecisionType,
+    action: JevActionType,
+    side: str,
+):
+    decision = JevDecisionV1(
+        schema_version="v1",
+        decision_id=f"decision:{reason_code.value}",
+        run_id="run:microtrend",
+        cell_id="cell:microtrend",
+        candidate_trigger_id="candidate:microtrend",
+        correlation_id="correlation:microtrend",
+        strategy_id="trend.microtrend.scalper",
+        strategy_revision="microtrend-v3",
+        decision=decision_type.value,
+        action=action.value,
+        side=side,
+        reason_codes=[reason_code.value],
+        input_evidence_refs={},
+        market_state_hash="market-state-hash",
+        decided_at=1.0,
+    )
+
+    assert microtrend_outcome(decision) is reason_code
+
+
+def test_microtrend_reason_code_with_mismatched_outer_decision_fails_closed():
+    decision = JevDecisionV1(
+        schema_version="v1",
+        decision_id="decision:invalid",
+        run_id="run:microtrend",
+        cell_id="cell:microtrend",
+        candidate_trigger_id="candidate:microtrend",
+        correlation_id="correlation:microtrend",
+        strategy_id="trend.microtrend.scalper",
+        strategy_revision="microtrend-v3",
+        decision=JevDecisionType.NO_ACTION.value,
+        action=JevActionType.NONE.value,
+        side="NONE",
+        reason_codes=[MicrotrendJevReasonCode.CONTINUATION.value],
+        input_evidence_refs={},
+        market_state_hash="market-state-hash",
+        decided_at=1.0,
+    )
+
+    with pytest.raises(JevValidationError, match="MICROTREND_REASON_CONTRACT_INVALID"):
+        microtrend_outcome(decision)
 
 
 @pytest.mark.asyncio
