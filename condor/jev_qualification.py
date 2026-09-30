@@ -40,6 +40,20 @@ class JevActionType(StrEnum):
     EXIT = "EXIT"
 
 
+class MicrotrendJevReasonCode(StrEnum):
+    """Backward-compatible reason-code vocabulary for Microtrend v3.
+
+    The outer JevDecisionV1 enum remains the established contract. These codes
+    only qualify the outcome for the Microtrend pullback path and do not alter
+    orderflow-strategy semantics or grant execution authority.
+    """
+
+    CONTINUATION = "MICROTREND_CONTINUATION"
+    NEUTRAL = "MICROTREND_NEUTRAL"
+    REVERSAL_RISK = "MICROTREND_REVERSAL_RISK"
+    INVALID = "MICROTREND_INVALID"
+
+
 class JevValidationError(ValueError):
     """Raised when Jev candidate trigger or decision contract fails validation."""
 
@@ -177,6 +191,36 @@ class JevDecisionV1:
         )
         decision.validate()
         return decision
+
+
+def microtrend_outcome(decision: JevDecisionV1) -> MicrotrendJevReasonCode:
+    """Validate and classify a Microtrend-v3 Jev outcome from its reason code.
+
+    A non-Microtrend decision, mismatched outer decision, action, or side is
+    invalid. This keeps the generic Jev contract stable while providing a
+    deterministic adapter boundary for Microtrend consumers.
+    """
+
+    decision.validate()
+    reasons = set(decision.reason_codes)
+    mappings = (
+        (MicrotrendJevReasonCode.CONTINUATION, JevDecisionType.SIGNAL_QUALIFIED.value, JevActionType.ENTRY.value),
+        (MicrotrendJevReasonCode.NEUTRAL, JevDecisionType.NO_ACTION.value, JevActionType.NONE.value),
+        (MicrotrendJevReasonCode.REVERSAL_RISK, JevDecisionType.SIGNAL_REJECTED.value, JevActionType.NONE.value),
+        (MicrotrendJevReasonCode.INVALID, JevDecisionType.SIGNAL_REJECTED.value, JevActionType.NONE.value),
+    )
+    for outcome, expected_decision, expected_action in mappings:
+        if outcome.value not in reasons:
+            continue
+        if decision.decision != expected_decision or decision.action != expected_action:
+            raise JevValidationError(f"MICROTREND_REASON_CONTRACT_INVALID:{outcome.value}")
+        if outcome is MicrotrendJevReasonCode.CONTINUATION:
+            if decision.side not in {"BUY", "SELL"}:
+                raise JevValidationError("MICROTREND_CONTINUATION_SIDE_INVALID")
+        elif decision.side != "NONE":
+            raise JevValidationError(f"MICROTREND_REASON_SIDE_INVALID:{outcome.value}")
+        return outcome
+    raise JevValidationError("MICROTREND_REASON_CODE_MISSING")
 
 
 class JevQualificationClient(Protocol):
